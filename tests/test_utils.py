@@ -1,6 +1,8 @@
 import copy
 import filecmp
+import importlib
 import os
+import sys
 import tarfile
 import zipfile
 from collections import deque
@@ -1011,3 +1013,56 @@ def test_should_bypass_proxies_win_registry_ProxyOverride_value(monkeypatch):
     monkeypatch.setattr(winreg, "OpenKey", OpenKey)
     monkeypatch.setattr(winreg, "QueryValueEx", QueryValueEx)
     assert should_bypass_proxies("http://example.com/", None) is False
+
+
+@pytest.mark.parametrize(
+    "override, host, expected",
+    (
+        # Exact entry must not match a longer, attacker-influenced suffix.
+        ("google.com", "google.com", True),
+        ("google.com", "google.com.evil.com", False),
+        # Wildcard entry must only match its own domain suffix.
+        ("*.corp", "a.corp", True),
+        ("*.corp", "a.corp.evil.com", False),
+        # IP-like entry must be fully anchored.
+        ("10.0.0.1", "10.0.0.1", True),
+        ("10.0.0.1", "10.0.0.1x", False),
+        # Plain entry matching.
+        ("internal", "internal", True),
+        ("internal", "notinternal", False),
+        # <local> handling is unaffected.
+        ("<local>", "hostwithnodot", True),
+        ("<local>", "host.withdot", False),
+    ),
+)
+def test_proxy_bypass_registry_anchors_pattern(override, host, expected, monkeypatch):
+    """Regression test for #7629: proxy_bypass_registry must anchor the
+    converted override pattern at both ends so a hostname suffix cannot
+    escape an override rule (e.g. "google.com" must not bypass
+    "google.com.evil.com").
+    """
+    from requests.utils import proxy_bypass_registry
+
+    import winreg
+
+    class RegHandle:
+        def Close(self):
+            pass
+
+    ie_settings = RegHandle()
+
+    def OpenKey(key, subkey):
+        return ie_settings
+
+    def QueryValueEx(key, value_name):
+        if key is ie_settings:
+            if value_name == "ProxyEnable":
+                return [1]
+            elif value_name == "ProxyOverride":
+                return [override]
+
+    monkeypatch.setenv("no_proxy", "")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setattr(winreg, "OpenKey", OpenKey)
+    monkeypatch.setattr(winreg, "QueryValueEx", QueryValueEx)
+    assert proxy_bypass_registry(host) is expected

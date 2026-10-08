@@ -130,7 +130,10 @@ if sys.platform == "win32":
             test = test.replace(".", r"\.")  # mask dots
             test = test.replace("*", r".*")  # change glob sequence
             test = test.replace("?", r".")  # change glob char
-            if re.match(test, host, re.I):
+            # Anchor the end of the pattern so a suffix cannot escape the
+            # override rule (e.g. "google.com" must not match
+            # "google.com.evil.com"). re.match only anchors the start.
+            if re.match(test + r"\Z", host, re.I):
                 return True
         return False
 
